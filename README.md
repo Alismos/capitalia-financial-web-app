@@ -1,5 +1,13 @@
 # Capitalia
 
-Aplicación web financiera estática servida vía GitHub Pages.
+Static financial web app served via GitHub Pages.
 
-🌐 https://Alismos.github.io/capitalia-financial-web-app/
+Live site: https://Alismos.github.io/capitalia-financial-web-app/
+
+## Updating the site
+
+Replace `index.html` with a new version and push, or use the helper:
+
+```bash
+./update.sh "/path/to/new/Capitalia v3.html"
+```

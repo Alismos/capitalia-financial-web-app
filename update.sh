@@ -2,14 +2,14 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-  echo "Usage: ./update.sh \"/ruta/al/Capitalia v3.html\""
+  echo "Usage: ./update.sh \"/path/to/Capitalia v3.html\""
   exit 1
 fi
 
 SRC="$1"
 
 if [ ! -f "$SRC" ]; then
-  echo "Error: archivo no encontrado: $SRC"
+  echo "Error: file not found: $SRC"
   exit 1
 fi
 
