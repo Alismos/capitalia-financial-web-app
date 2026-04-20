@@ -1,6 +1,7 @@
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `capitalia-${VERSION}`;
-const ASSETS = [
+
+const REQUIRED_ASSETS = [
   './',
   './index.html',
   './manifest.webmanifest',
@@ -9,10 +10,23 @@ const ASSETS = [
   './apple-touch-icon.png',
 ];
 
+// Cached best-effort during install so the app works offline after the first load.
+// If the CDN is unreachable, install still succeeds with only the required assets.
+const OPTIONAL_ASSETS = [
+  'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js',
+];
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll(REQUIRED_ASSETS);
+    await Promise.allSettled(
+      OPTIONAL_ASSETS.map((url) =>
+        cache.add(new Request(url, { cache: 'reload', mode: 'cors', credentials: 'omit' }))
+      )
+    );
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', (event) => {
@@ -23,18 +37,23 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Stale-while-revalidate for same-origin GETs.
+// Cache-first for any GET (same-origin or pre-cached cross-origin), with
+// background revalidation for same-origin responses so updates propagate.
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return;
 
   event.respondWith(
     caches.match(request).then((cached) => {
       const network = fetch(request)
         .then((response) => {
-          if (response && response.status === 200 && response.type === 'basic') {
+          if (
+            response &&
+            response.status === 200 &&
+            response.type === 'basic' &&
+            url.origin === self.location.origin
+          ) {
             const copy = response.clone();
             caches.open(CACHE).then((cache) => cache.put(request, copy));
           }

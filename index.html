@@ -1605,6 +1605,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
       Exportar datos
     </button>
+    <button class="nav-item" onclick="exportExcel()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+      Exportar a Excel
+    </button>
     <button class="nav-item" onclick="importData()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
       Importar datos
@@ -3426,6 +3430,114 @@ function exportData() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   toast('Archivo exportado');
+}
+
+let __sheetJsPromise = null;
+function loadSheetJS() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (__sheetJsPromise) return __sheetJsPromise;
+  __sheetJsPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+    script.crossOrigin = 'anonymous';
+    script.onload = () => resolve(window.XLSX);
+    script.onerror = () => {
+      __sheetJsPromise = null;
+      reject(new Error('No se pudo cargar SheetJS'));
+    };
+    document.head.appendChild(script);
+  });
+  return __sheetJsPromise;
+}
+
+async function exportExcel() {
+  if (operations.length === 0 && globalIncomes.length === 0) {
+    return toast('No hay datos para exportar', true);
+  }
+  let XLSX;
+  try {
+    toast('Cargando librería Excel…');
+    XLSX = await loadSheetJS();
+  } catch (e) {
+    return toast('Error cargando librería Excel', true);
+  }
+
+  const compras = operations.map(op => {
+    const invested = (op.lots || []).reduce((s, l) =>
+      s + (l.investors || []).reduce((ss, inv) => ss + (inv.amount || 0), 0), 0);
+    const costsTotal = (op.costs || []).reduce((s, c) => s + (c.amount || 0), 0);
+    return {
+      'ID': op.id,
+      'Activo': op.asset || '',
+      'Fecha registro': op.date || '',
+      'Estado': op.status || (op.priceSell ? 'vendida' : 'abierta'),
+      'Fecha venta': op.dateClose || '',
+      'Precio venta / unid': op.priceSell || '',
+      'Unidades vendidas': op.qtySell || '',
+      'Socio mayoritario': op.a1?.name || '',
+      '% mayoritario': op.a1?.pct ?? '',
+      'Segundo socio': op.a2?.name || '',
+      '# Lotes': (op.lots || []).length,
+      'Inversión total': invested,
+      '# Pagos': (op.abonos || []).length,
+      '# Costos': (op.costs || []).length,
+      'Total costos': costsTotal,
+      'Notas': op.notes || ''
+    };
+  });
+
+  const aportes = [];
+  operations.forEach(op => (op.lots || []).forEach(lot => (lot.investors || []).forEach(inv => {
+    aportes.push({
+      'ID operación': op.id,
+      'Activo': op.asset || '',
+      'Fecha lote': lot.date || '',
+      'Precio compra / unid': lot.priceBuy || '',
+      'Socio': inv.name || '',
+      'Aporte': inv.amount || 0
+    });
+  })));
+
+  const pagos = [];
+  operations.forEach(op => (op.abonos || []).forEach(a => {
+    pagos.push({
+      'ID pago': a.id,
+      'ID operación': op.id,
+      'Activo': op.asset || '',
+      'Fecha pago': a.date || '',
+      'Socio destinatario': a.targetName || '',
+      'Monto': a.amount || 0,
+      'Nota': a.note || ''
+    });
+  }));
+
+  const costos = [];
+  operations.forEach(op => (op.costs || []).forEach(c => {
+    costos.push({
+      'ID operación': op.id,
+      'Activo': op.asset || '',
+      'Concepto': c.concept || '',
+      'Monto': c.amount || 0,
+      'Pagado por': (c.paidBy || []).join(', ')
+    });
+  }));
+
+  const ingresos = globalIncomes.map(i => ({
+    'ID': i.id,
+    'Fecha': i.date || '',
+    'Monto': i.amount || 0,
+    'Nota': i.note || ''
+  }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(compras), 'Compras');
+  if (aportes.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(aportes), 'Aportes');
+  if (pagos.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pagos), 'Pagos');
+  if (costos.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(costos), 'Costos');
+  if (ingresos.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ingresos), 'Ingresos globales');
+
+  XLSX.writeFile(wb, `capitalia-${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast('Excel exportado');
 }
 
 function importData() {
