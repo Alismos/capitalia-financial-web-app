@@ -170,6 +170,7 @@ test('SheetJS CDN version matches between index.html and sw.js', () => {
 });
 test('exportExcel writes the ledger-style sheets', () => {
   [
+    'Resumen',
     'Operaciones',
     'Socios Minoritarios',
     'Costos Intrínsecos',
@@ -191,10 +192,26 @@ test('exportExcel converts dates to Excel serial', () => {
     'exportExcel must use Excel epoch (Dec 30 1899) for serial conversion');
 });
 test('exportExcel emits a TOTAL row per sheet', () => {
-  // Count TOTAL row occurrences in the export builder; we expect ≥ 5
-  // (Operaciones, Socios, Costos, Abonos, Ingresos, Consolidado — some optional).
   const totalRows = (html.match(/\['TOTAL',/g) || []).length;
   assert(totalRows >= 5, `expected ≥5 TOTAL rows in exportExcel, found ${totalRows}`);
+});
+test('exportExcel applies cell number formats (money, pct, date)', () => {
+  assert(html.includes('"$"#,##0'), 'money format string missing');
+  assert(html.includes("'0.00%'"), 'percentage format string missing');
+  assert(html.includes("'yyyy-mm-dd'"), 'date format string missing');
+});
+test('exportExcel sets per-sheet column widths', () => {
+  assert(/ws\['!cols'\]\s*=\s*cols/.test(html) || html.includes("'!cols'"),
+    'column widths (!cols) not configured');
+});
+test('exportExcel freezes the header row', () => {
+  assert(html.includes("'!freeze'") || html.includes("'!views'"),
+    'frozen header row not configured');
+});
+test('Resumen sheet includes fund balance and ROI', () => {
+  assert(html.includes('Balance del fondo'), '"Balance del fondo" metric missing');
+  assert(html.includes('ROI promedio'), '"ROI promedio" metric missing');
+  assert(html.includes('Utilidad neta'), '"Utilidad neta" metric missing');
 });
 
 // CSS dark-mode regressions

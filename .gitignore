@@ -3,3 +3,9 @@ Thumbs.db
 node_modules/
 .vscode/
 .idea/
+
+# Personal data exports (never commit user ledger data)
+ledger-*.json
+ledger-*.xlsx
+capitalia-*.json
+capitalia-*.xlsx
