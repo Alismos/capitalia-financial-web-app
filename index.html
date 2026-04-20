@@ -3462,79 +3462,198 @@ async function exportExcel() {
     return toast('Error cargando librería Excel', true);
   }
 
-  const compras = operations.map(op => {
-    const invested = (op.lots || []).reduce((s, l) =>
-      s + (l.investors || []).reduce((ss, inv) => ss + (inv.amount || 0), 0), 0);
-    const costsTotal = (op.costs || []).reduce((s, c) => s + (c.amount || 0), 0);
-    return {
-      'ID': op.id,
-      'Activo': op.asset || '',
-      'Fecha registro': op.date || '',
-      'Estado': op.status || (op.priceSell ? 'vendida' : 'abierta'),
-      'Fecha venta': op.dateClose || '',
-      'Precio venta / unid': op.priceSell || '',
-      'Unidades vendidas': op.qtySell || '',
-      'Socio mayoritario': op.a1?.name || '',
-      '% mayoritario': op.a1?.pct ?? '',
-      'Segundo socio': op.a2?.name || '',
-      '# Lotes': (op.lots || []).length,
-      'Inversión total': invested,
-      '# Pagos': (op.abonos || []).length,
-      '# Costos': (op.costs || []).length,
-      'Total costos': costsTotal,
-      'Notas': op.notes || ''
-    };
+  const EXCEL_EPOCH = Date.UTC(1899, 11, 30);
+  const toSerial = (v) => {
+    if (v == null || v === '') return '';
+    const d = new Date(v);
+    if (isNaN(d)) return v;
+    return (d.getTime() - EXCEL_EPOCH) / 86400000;
+  };
+  const statusEs = { open: 'En curso', partial: 'Parcial', paid: 'Pagado', pending: 'Pendiente' };
+  const sum = (rows, col) => rows.reduce((a, r) => a + (Number(r[col]) || 0), 0);
+
+  const opViews = operations.map((op) => ({
+    op,
+    c: computeOperation(op),
+    pb: computePaymentsBreakdown(op),
+  }));
+
+  // ---- Operaciones ----
+  const opsRows = opViews.map(({ op, c, pb }) => [
+    toSerial(op.date),
+    op.asset || '',
+    c.invested,
+    c.avgPriceBuy,
+    op.priceSell || 0,
+    c.qtyBuy,
+    op.qtySell || 0,
+    (c.commissionPct || 0) / 100,
+    c.revenue,
+    c.grossProfit,
+    -c.totalCosts,
+    c.profitAfterCosts,
+    (c.roi || 0) / 100,
+    statusEs[pb.status] || pb.status,
+    pb.totalAbonado,
+    pb.totalPending,
+    op.notes || '',
+  ]);
+  const opsAoA = [
+    ['Fecha', 'Activo', 'Capital Invertido', 'Precio Compra', 'Precio Venta', 'Acciones Compradas', 'Acciones Vendidas', 'Comisión %', 'Venta Total', 'Utilidad Bruta', 'Costos Intrínsecos', 'Utilidad Neta', 'ROI %', 'Estado Pago', 'Total Abonado', 'Pendiente', 'Notas'],
+    ...opsRows,
+    ['TOTAL', '', sum(opsRows, 2), '', '', sum(opsRows, 5), sum(opsRows, 6), '', sum(opsRows, 8), sum(opsRows, 9), sum(opsRows, 10), sum(opsRows, 11), '', '', sum(opsRows, 14), sum(opsRows, 15), ''],
+  ];
+
+  // ---- Socios Minoritarios ----
+  const minRows = [];
+  opViews.forEach(({ op, c, pb }) => {
+    c.minorityPayouts.forEach((m) => {
+      const k = normName(m.name);
+      const received = pb.participants && pb.participants[k] ? pb.participants[k].received : 0;
+      const expected = m.contribution + m.profit + m.reimbursement;
+      minRows.push([
+        toSerial(op.date),
+        op.asset || '',
+        m.name,
+        m.contribution,
+        (m.sharesPct || 0) / 100,
+        m.sharesOwned,
+        m.profit,
+        m.reimbursement,
+        expected,
+        received,
+        expected - received,
+      ]);
+    });
   });
+  const minAoA = [
+    ['Fecha Op', 'Activo', 'Socio', 'Aporte Capital', '% en Op', 'Acciones', 'Utilidad', 'Reintegros', 'Total Esperado', 'Ya Recibido', 'Pendiente'],
+    ...minRows,
+    ['TOTAL', '', '', sum(minRows, 3), '', '', sum(minRows, 6), sum(minRows, 7), sum(minRows, 8), sum(minRows, 9), sum(minRows, 10)],
+  ];
 
-  const aportes = [];
-  operations.forEach(op => (op.lots || []).forEach(lot => (lot.investors || []).forEach(inv => {
-    aportes.push({
-      'ID operación': op.id,
-      'Activo': op.asset || '',
-      'Fecha lote': lot.date || '',
-      'Precio compra / unid': lot.priceBuy || '',
-      'Socio': inv.name || '',
-      'Aporte': inv.amount || 0
+  // ---- Costos Intrínsecos ----
+  const costRows = [];
+  opViews.forEach(({ op }) => {
+    (op.costs || []).forEach((cst) => {
+      costRows.push([
+        toSerial(op.date),
+        op.asset || '',
+        cst.concept || '',
+        -(cst.amount || 0),
+        (cst.paidBy || []).join(', '),
+      ]);
     });
-  })));
+  });
+  const costAoA = [
+    ['Fecha Op', 'Activo', 'Concepto', 'Monto', 'Pagado Por'],
+    ...costRows,
+    ['TOTAL', '', '', sum(costRows, 3), ''],
+  ];
 
-  const pagos = [];
-  operations.forEach(op => (op.abonos || []).forEach(a => {
-    pagos.push({
-      'ID pago': a.id,
-      'ID operación': op.id,
-      'Activo': op.asset || '',
-      'Fecha pago': a.date || '',
-      'Socio destinatario': a.targetName || '',
-      'Monto': a.amount || 0,
-      'Nota': a.note || ''
+  // ---- Abonos ----
+  const abonoRows = [];
+  opViews.forEach(({ op }) => {
+    (op.abonos || []).forEach((a) => {
+      abonoRows.push([
+        toSerial(a.date),
+        toSerial(op.date),
+        op.asset || '',
+        a.targetName || '',
+        a.amount || 0,
+        a.note || '',
+        a.batchId || '',
+      ]);
     });
-  }));
+  });
+  const abonoAoA = [
+    ['Fecha Abono', 'Fecha Op', 'Activo', 'Inversor', 'Monto', 'Nota', 'Batch ID'],
+    ...abonoRows,
+    ['TOTAL', '', '', '', sum(abonoRows, 4), '', ''],
+  ];
 
-  const costos = [];
-  operations.forEach(op => (op.costs || []).forEach(c => {
-    costos.push({
-      'ID operación': op.id,
-      'Activo': op.asset || '',
-      'Concepto': c.concept || '',
-      'Monto': c.amount || 0,
-      'Pagado por': (c.paidBy || []).join(', ')
+  // ---- Ingresos ----
+  const incRows = (globalIncomes || []).map((i) => [
+    toSerial(i.date),
+    i.amount || 0,
+    i.note || '',
+  ]);
+  const incAoA = [
+    ['Fecha', 'Monto', 'Fuente / Nota'],
+    ...incRows,
+    ['TOTAL', sum(incRows, 1), ''],
+  ];
+
+  // ---- Consolidado Inversores ----
+  const consolidated = {};
+  opViews.forEach(({ op, c, pb }) => {
+    const a1k = normName(op.a1 && op.a1.name || '');
+    const seenInOp = new Set();
+    const ensureEntry = (name) => {
+      const k = normName(name);
+      if (!k) return null;
+      if (!consolidated[k]) {
+        consolidated[k] = {
+          name, operations: 0, roles: new Set(),
+          capital: 0, profit: 0, reimbursement: 0, received: 0,
+        };
+      }
+      const e = consolidated[k];
+      if (!seenInOp.has(k)) {
+        e.operations += 1;
+        const p = pb.participants && pb.participants[k];
+        if (p) e.received += p.received;
+        seenInOp.add(k);
+      }
+      return e;
+    };
+
+    if (op.a1 && op.a1.name) {
+      const e = ensureEntry(op.a1.name);
+      if (e) {
+        e.roles.add('A1');
+        e.profit += c.a1Profit;
+        e.reimbursement += c.a1Reimbursement;
+      }
+    }
+    c.minorityPayouts.forEach((m) => {
+      const e = ensureEntry(m.name);
+      if (!e) return;
+      e.roles.add('Minoritario');
+      e.capital += m.contribution;
+      e.profit += m.profit;
+      e.reimbursement += m.reimbursement;
     });
-  }));
-
-  const ingresos = globalIncomes.map(i => ({
-    'ID': i.id,
-    'Fecha': i.date || '',
-    'Monto': i.amount || 0,
-    'Nota': i.note || ''
-  }));
+  });
+  const consRows = Object.values(consolidated).map((e) => {
+    const capitalReturn = e.capital;
+    const expected = capitalReturn + e.profit + e.reimbursement;
+    return [
+      e.name,
+      e.operations,
+      Array.from(e.roles).sort().join(', '),
+      e.capital,
+      capitalReturn,
+      e.profit,
+      e.reimbursement,
+      expected,
+      e.received,
+      expected - e.received,
+    ];
+  });
+  const consAoA = [
+    ['Inversor', 'Operaciones', 'Roles', 'Capital Aportado', 'Capital a Devolver', 'Utilidad', 'Reintegros', 'Total Esperado', 'Ya Recibido', 'Saldo Pendiente'],
+    ...consRows,
+    ['TOTAL', '', '', sum(consRows, 3), sum(consRows, 4), sum(consRows, 5), sum(consRows, 6), sum(consRows, 7), sum(consRows, 8), sum(consRows, 9)],
+  ];
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(compras), 'Compras');
-  if (aportes.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(aportes), 'Aportes');
-  if (pagos.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pagos), 'Pagos');
-  if (costos.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(costos), 'Costos');
-  if (ingresos.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ingresos), 'Ingresos globales');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(opsAoA), 'Operaciones');
+  if (minRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(minAoA), 'Socios Minoritarios');
+  if (costRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(costAoA), 'Costos Intrínsecos');
+  if (abonoRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(abonoAoA), 'Abonos');
+  if (incRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(incAoA), 'Ingresos');
+  if (consRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(consAoA), 'Consolidado Inversores');
 
   XLSX.writeFile(wb, `capitalia-${new Date().toISOString().slice(0,10)}.xlsx`);
   toast('Excel exportado');

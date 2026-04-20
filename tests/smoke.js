@@ -168,10 +168,33 @@ test('SheetJS CDN version matches between index.html and sw.js', () => {
   assert(mHtml[1] === mSw[1],
     `version mismatch: index.html=${mHtml[1]} vs sw.js=${mSw[1]}`);
 });
-test('exportExcel writes all 5 sheets', () => {
-  ['Compras', 'Aportes', 'Pagos', 'Costos', 'Ingresos globales'].forEach((sheet) => {
+test('exportExcel writes the ledger-style sheets', () => {
+  [
+    'Operaciones',
+    'Socios Minoritarios',
+    'Costos Intrínsecos',
+    'Abonos',
+    'Ingresos',
+    'Consolidado Inversores',
+  ].forEach((sheet) => {
     assert(html.includes(`'${sheet}'`), `sheet name "${sheet}" not found in exportExcel`);
   });
+});
+test('exportExcel reuses computeOperation and computePaymentsBreakdown', () => {
+  assert(/exportExcel[\s\S]*?computeOperation\(op\)/.test(html),
+    'exportExcel must use computeOperation(op) for rich op metrics');
+  assert(/exportExcel[\s\S]*?computePaymentsBreakdown\(op\)/.test(html),
+    'exportExcel must use computePaymentsBreakdown(op) for payment breakdown');
+});
+test('exportExcel converts dates to Excel serial', () => {
+  assert(html.includes("Date.UTC(1899, 11, 30)"),
+    'exportExcel must use Excel epoch (Dec 30 1899) for serial conversion');
+});
+test('exportExcel emits a TOTAL row per sheet', () => {
+  // Count TOTAL row occurrences in the export builder; we expect ≥ 5
+  // (Operaciones, Socios, Costos, Abonos, Ingresos, Consolidado — some optional).
+  const totalRows = (html.match(/\['TOTAL',/g) || []).length;
+  assert(totalRows >= 5, `expected ≥5 TOTAL rows in exportExcel, found ${totalRows}`);
 });
 
 // CSS dark-mode regressions
