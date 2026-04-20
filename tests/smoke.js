@@ -172,14 +172,19 @@ test('exportExcel writes the ledger-style sheets', () => {
   [
     'Resumen',
     'Operaciones',
-    'Socios Minoritarios',
-    'Costos Intrínsecos',
     'Abonos',
     'Ingresos',
     'Consolidado Inversores',
   ].forEach((sheet) => {
     assert(html.includes(`'${sheet}'`), `sheet name "${sheet}" not found in exportExcel`);
   });
+});
+test('exportExcel does NOT emit Socios Minoritarios or Costos Intrínsecos as separate sheets', () => {
+  // They were merged into Operaciones (column Costos Intrínsecos) and
+  // Consolidado Inversores (per-investor aggregate). Keep the label "Costos
+  // Intrínsecos" only as a column header in Operaciones, not a sheet name.
+  assert(!/addSheet\(\s*minAoA/.test(html), 'Socios Minoritarios sheet should not be added');
+  assert(!/addSheet\(\s*costAoA/.test(html), 'Costos Intrínsecos sheet should not be added');
 });
 test('exportExcel reuses computeOperation and computePaymentsBreakdown', () => {
   assert(/exportExcel[\s\S]*?computeOperation\(op\)/.test(html),
@@ -192,13 +197,31 @@ test('exportExcel converts dates to Excel serial', () => {
     'exportExcel must use Excel epoch (Dec 30 1899) for serial conversion');
 });
 test('exportExcel emits a TOTAL row per sheet', () => {
+  // Sheets with TOTAL: Operaciones, Abonos, Ingresos, Consolidado Inversores (4).
   const totalRows = (html.match(/\['TOTAL',/g) || []).length;
-  assert(totalRows >= 5, `expected ≥5 TOTAL rows in exportExcel, found ${totalRows}`);
+  assert(totalRows >= 4, `expected ≥4 TOTAL rows in exportExcel, found ${totalRows}`);
 });
 test('exportExcel applies cell number formats (money, pct, date)', () => {
   assert(html.includes('"$"#,##0'), 'money format string missing');
-  assert(html.includes("'0.00%'"), 'percentage format string missing');
+  assert(html.includes('0.00%;[Red]-0.00%'), 'percentage format string missing');
   assert(html.includes("'yyyy-mm-dd'"), 'date format string missing');
+});
+test('exportExcel colors losses red and profits green via number-format color codes', () => {
+  assert(html.includes('[Red]-"$"#,##0'), 'red-on-negative money format missing');
+  assert(html.includes('[Green]"$"#,##0'), 'green-on-positive profit format missing');
+  assert(html.includes('[Red]"$"#,##0'), 'red cost format missing');
+  assert(html.includes('[Green]0.00%'), 'green profit percent format missing');
+});
+test('exportExcel routes profit/cost/loss cells through the colored helpers', () => {
+  assert(/function cellProfit\s*\(/.test(html) || html.includes('const cellProfit ='),
+    'cellProfit helper missing');
+  assert(/function cellCost\s*\(/.test(html) || html.includes('const cellCost ='),
+    'cellCost helper missing');
+  // Verify the Utilidad Neta / Balance del fondo paths use cellProfit
+  assert(/cellProfit\(c\.profitAfterCosts\)/.test(html),
+    'Utilidad Neta column should use cellProfit');
+  assert(/cellProfit\(fundBalance\)/.test(html),
+    'Balance del fondo should use cellProfit');
 });
 test('exportExcel sets per-sheet column widths', () => {
   assert(/ws\['!cols'\]\s*=\s*cols/.test(html) || html.includes("'!cols'"),

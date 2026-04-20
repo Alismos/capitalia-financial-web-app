@@ -3463,11 +3463,16 @@ async function exportExcel() {
   }
 
   // ---- Cell helpers: produce formatted cell objects that SheetJS respects ----
+  // Excel number-format strings with color codes ([Red], [Green]) are rendered
+  // natively by Excel/LibreOffice without any styling library.
   const EXCEL_EPOCH = Date.UTC(1899, 11, 30);
-  const MONEY_FMT = '"$"#,##0';
-  const PCT_FMT = '0.00%';
   const DATE_FMT = 'yyyy-mm-dd';
   const NUM_FMT = '#,##0.##';
+  const MONEY_FMT = '"$"#,##0;[Red]-"$"#,##0';
+  const PCT_FMT = '0.00%;[Red]-0.00%';
+  const PROFIT_MONEY_FMT = '[Green]"$"#,##0;[Red]-"$"#,##0';
+  const PROFIT_PCT_FMT = '[Green]0.00%;[Red]-0.00%';
+  const COST_MONEY_FMT = '[Red]"$"#,##0;[Red]-"$"#,##0';
 
   const toSerial = (v) => {
     if (v == null || v === '') return null;
@@ -3484,10 +3489,25 @@ async function exportExcel() {
     if (!isFinite(n)) return '';
     return { v: n, t: 'n', z: MONEY_FMT };
   };
+  const cellProfit = (v) => {
+    const n = Number(v);
+    if (!isFinite(n)) return '';
+    return { v: n, t: 'n', z: PROFIT_MONEY_FMT };
+  };
+  const cellCost = (v) => {
+    const n = Number(v);
+    if (!isFinite(n)) return '';
+    return { v: n, t: 'n', z: COST_MONEY_FMT };
+  };
   const cellPct = (v) => {
     const n = Number(v);
     if (!isFinite(n)) return '';
     return { v: n, t: 'n', z: PCT_FMT };
+  };
+  const cellProfitPct = (v) => {
+    const n = Number(v);
+    if (!isFinite(n)) return '';
+    return { v: n, t: 'n', z: PROFIT_PCT_FMT };
   };
   const cellNum = (v) => {
     const n = Number(v);
@@ -3522,10 +3542,10 @@ async function exportExcel() {
     cellNum(op.qtySell || 0),
     cellPct((c.commissionPct || 0) / 100),
     cellMoney(c.revenue),
-    cellMoney(c.grossProfit),
-    cellMoney(-c.totalCosts),
-    cellMoney(c.profitAfterCosts),
-    cellPct((c.roi || 0) / 100),
+    cellProfit(c.grossProfit),
+    cellCost(-c.totalCosts),
+    cellProfit(c.profitAfterCosts),
+    cellProfitPct((c.roi || 0) / 100),
     statusEs[pb.status] || pb.status || '',
     cellMoney(pb.totalAbonado),
     cellMoney(pb.totalPending),
@@ -3534,58 +3554,9 @@ async function exportExcel() {
   const opsAoA = [
     ['Fecha', 'Activo', 'Capital Invertido', 'Precio Compra', 'Precio Venta', 'Acciones Compradas', 'Acciones Vendidas', 'Comisión %', 'Venta Total', 'Utilidad Bruta', 'Costos Intrínsecos', 'Utilidad Neta', 'ROI %', 'Estado Pago', 'Total Abonado', 'Pendiente', 'Notas'],
     ...opsRows,
-    ['TOTAL', '', cellMoney(sum(opsRows, 2)), '', '', cellNum(sum(opsRows, 5)), cellNum(sum(opsRows, 6)), '', cellMoney(sum(opsRows, 8)), cellMoney(sum(opsRows, 9)), cellMoney(sum(opsRows, 10)), cellMoney(sum(opsRows, 11)), '', '', cellMoney(sum(opsRows, 14)), cellMoney(sum(opsRows, 15)), ''],
+    ['TOTAL', '', cellMoney(sum(opsRows, 2)), '', '', cellNum(sum(opsRows, 5)), cellNum(sum(opsRows, 6)), '', cellMoney(sum(opsRows, 8)), cellProfit(sum(opsRows, 9)), cellCost(sum(opsRows, 10)), cellProfit(sum(opsRows, 11)), '', '', cellMoney(sum(opsRows, 14)), cellMoney(sum(opsRows, 15)), ''],
   ];
   const opsCols = [12, 8, 16, 14, 14, 12, 12, 10, 16, 16, 16, 16, 9, 12, 16, 16, 22].map((w) => ({ wch: w }));
-
-  // ---- Socios Minoritarios ----
-  const minRows = [];
-  opViews.forEach(({ op, c, pb }) => {
-    c.minorityPayouts.forEach((m) => {
-      const k = normName(m.name);
-      const received = pb.participants && pb.participants[k] ? pb.participants[k].received : 0;
-      const expected = m.contribution + m.profit + m.reimbursement;
-      minRows.push([
-        cellDate(op.date),
-        op.asset || '',
-        m.name || '',
-        cellMoney(m.contribution),
-        cellPct((m.sharesPct || 0) / 100),
-        cellNum(m.sharesOwned),
-        cellMoney(m.profit),
-        cellMoney(m.reimbursement),
-        cellMoney(expected),
-        cellMoney(received),
-        cellMoney(expected - received),
-      ]);
-    });
-  });
-  const minAoA = [
-    ['Fecha Op', 'Activo', 'Socio', 'Aporte Capital', '% en Op', 'Acciones', 'Utilidad', 'Reintegros', 'Total Esperado', 'Ya Recibido', 'Pendiente'],
-    ...minRows,
-    ['TOTAL', '', '', cellMoney(sum(minRows, 3)), '', '', cellMoney(sum(minRows, 6)), cellMoney(sum(minRows, 7)), cellMoney(sum(minRows, 8)), cellMoney(sum(minRows, 9)), cellMoney(sum(minRows, 10))],
-  ];
-  const minCols = [12, 8, 14, 16, 9, 10, 16, 14, 16, 16, 16].map((w) => ({ wch: w }));
-
-  // ---- Costos Intrínsecos ----
-  const costRows = [];
-  opViews.forEach(({ op }) => {
-    (op.costs || []).forEach((cst) => {
-      costRows.push([
-        cellDate(op.date),
-        op.asset || '',
-        cst.concept || '',
-        cellMoney(-(cst.amount || 0)),
-        (cst.paidBy || []).join(', '),
-      ]);
-    });
-  });
-  const costAoA = [
-    ['Fecha Op', 'Activo', 'Concepto', 'Monto', 'Pagado Por'],
-    ...costRows,
-    ['TOTAL', '', '', cellMoney(sum(costRows, 3)), ''],
-  ];
-  const costCols = [12, 8, 22, 16, 20].map((w) => ({ wch: w }));
 
   // ---- Abonos ----
   const abonoRows = [];
@@ -3669,7 +3640,7 @@ async function exportExcel() {
       Array.from(e.roles).sort().join(', '),
       cellMoney(e.capital),
       cellMoney(e.capital),
-      cellMoney(e.profit),
+      cellProfit(e.profit),
       cellMoney(e.reimbursement),
       cellMoney(expected),
       cellMoney(e.received),
@@ -3679,7 +3650,7 @@ async function exportExcel() {
   const consAoA = [
     ['Inversor', 'Operaciones', 'Roles', 'Capital Aportado', 'Capital a Devolver', 'Utilidad', 'Reintegros', 'Total Esperado', 'Ya Recibido', 'Saldo Pendiente'],
     ...consRows,
-    ['TOTAL', '', '', cellMoney(sum(consRows, 3)), cellMoney(sum(consRows, 4)), cellMoney(sum(consRows, 5)), cellMoney(sum(consRows, 6)), cellMoney(sum(consRows, 7)), cellMoney(sum(consRows, 8)), cellMoney(sum(consRows, 9))],
+    ['TOTAL', '', '', cellMoney(sum(consRows, 3)), cellMoney(sum(consRows, 4)), cellProfit(sum(consRows, 5)), cellMoney(sum(consRows, 6)), cellMoney(sum(consRows, 7)), cellMoney(sum(consRows, 8)), cellMoney(sum(consRows, 9))],
   ];
   const consCols = [16, 12, 20, 16, 16, 16, 14, 16, 16, 16].map((w) => ({ wch: w }));
 
@@ -3710,14 +3681,14 @@ async function exportExcel() {
     [],
     ['Capital total invertido', cellMoney(totalInvested)],
     ['Venta total', cellMoney(totalRevenue)],
-    ['Utilidad bruta', cellMoney(totalGross)],
-    ['Costos intrínsecos', cellMoney(-totalCosts)],
-    ['Utilidad neta', cellMoney(totalNet)],
-    ['ROI promedio (sobre cerradas)', cellPct(avgROI)],
+    ['Utilidad bruta', cellProfit(totalGross)],
+    ['Costos intrínsecos', cellCost(-totalCosts)],
+    ['Utilidad neta', cellProfit(totalNet)],
+    ['ROI promedio (sobre cerradas)', cellProfitPct(avgROI)],
     [],
     ['Ingresos al fondo', cellMoney(totalIncomes)],
     ['Total abonado a inversores', cellMoney(totalAbonado)],
-    ['Balance del fondo', cellMoney(fundBalance)],
+    ['Balance del fondo', cellProfit(fundBalance)],
     ['Pendiente por pagar', cellMoney(totalPending)],
   ];
   const resumenCols = [{ wch: 34 }, { wch: 20 }];
@@ -3737,8 +3708,6 @@ async function exportExcel() {
   const wb = XLSX.utils.book_new();
   addSheet(resumenAoA, 'Resumen', resumenCols);
   addSheet(opsAoA, 'Operaciones', opsCols);
-  if (minRows.length) addSheet(minAoA, 'Socios Minoritarios', minCols);
-  if (costRows.length) addSheet(costAoA, 'Costos Intrínsecos', costCols);
   if (abonoRows.length) addSheet(abonoAoA, 'Abonos', abonoCols);
   if (incRows.length) addSheet(incAoA, 'Ingresos', incCols);
   if (consRows.length) addSheet(consAoA, 'Consolidado Inversores', consCols);
